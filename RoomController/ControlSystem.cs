@@ -1,5 +1,9 @@
-// Full code from RMC4 here
+// Full C# source code from the root file RMC4 goes here
 
-void Main() {
-    // ControlSystem logic
+using System;
+
+namespace RoomController {
+    public class ControlSystem {
+        // Methods and properties of the ControlSystem class
+    }
 }
