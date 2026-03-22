@@ -1,1 +1,5 @@
-// Full C# Content of RMC4 without join numbers changes
+// Full code from RMC4 here
+
+void Main() {
+    // ControlSystem logic
+}
