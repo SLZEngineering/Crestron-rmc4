@@ -1,5 +1,6 @@
 using System;
 using System.Text;
+using System.Collections.Generic;
 using Crestron.SimplSharp;
 using Crestron.SimplSharp.CrestronSockets;
 using Crestron.SimplSharpPro;
@@ -37,28 +38,33 @@ namespace RoomController
         // ------------------------------------------------------------
         // TOUCHPANEL JOIN MAP
         // ------------------------------------------------------------
-        private const uint JOIN_ROOM_ON     = 1;
-        private const uint JOIN_ROOM_OFF    = 2;
-        private const uint JOIN_VOL_UP      = 3;
-        private const uint JOIN_VOL_DOWN    = 4;
+        private const uint JOIN_ROOM_ON = 1;
+        private const uint JOIN_ROOM_OFF = 2;
+        private const uint JOIN_VOL_UP = 3;
+        private const uint JOIN_VOL_DOWN = 4;
         private const uint JOIN_MUTE_TOGGLE = 5;
-        private const uint JOIN_TEAMS_HOME  = 6;
+        private const uint JOIN_TEAMS_HOME = 6;
 
-        private const uint FB_QSYS_ONLINE   = 101;
-        private const uint FB_A20_ONLINE    = 102;
-        private const uint FB_SYSTEM_READY  = 103;
+        private const uint FB_QSYS_ONLINE = 101;
+        private const uint FB_A20_ONLINE = 102;
+        private const uint FB_SYSTEM_READY = 103;
 
-        private const uint TXT_STATUS       = 1;
+        private const uint TXT_STATUS = 1;
 
         public ControlSystem() : base()
         {
             try
             {
                 Thread.MaxNumberOfUserThreads = 20;
+
+                // Subscribe to controller events (optional but useful)
+                CrestronEnvironment.SystemEventHandler += _ControllerSystemEventHandler;
+                CrestronEnvironment.ProgramStatusEventHandler += _ControllerProgramEventHandler;
+                CrestronEnvironment.EthernetEventHandler += _ControllerEthernetEventHandler;
             }
             catch (Exception ex)
             {
-                ErrorLog.Error("Thread config error: {0}", ex.Message);
+                ErrorLog.Error("Error in constructor: {0}", ex.Message);
             }
         }
 
@@ -333,6 +339,21 @@ namespace RoomController
                              _a20Client.ClientStatus == SocketStatus.SOCKET_STATUS_CONNECTED;
 
             SetBoolFeedback(FB_SYSTEM_READY, qsysOnline && a20Online);
+        }
+
+        private void _ControllerEthernetEventHandler(EthernetEventArgs ethernetEventArgs)
+        {
+            // Optional: handle link up/down to reconnect sockets
+        }
+
+        private void _ControllerProgramEventHandler(eProgramStatusEventType programStatusEventType)
+        {
+            // Optional: cleanup on stop
+        }
+
+        private void _ControllerSystemEventHandler(eSystemEventType systemEventType)
+        {
+            // Optional: handle reboot/disk events
         }
     }
 }
