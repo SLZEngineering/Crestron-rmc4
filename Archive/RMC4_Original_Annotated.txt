@@ -1,0 +1,544 @@
+================================================================================
+  RMC4_Original.cs — Line-by-Line Translation / Annotation
+================================================================================
+
+--------------------------------------------------------------------------------
+IMPORTS / USING DIRECTIVES (Lines 1–8)
+--------------------------------------------------------------------------------
+
+using System;
+    // Gives access to core .NET types such as Exception, Console, etc.
+
+using System.Text;
+    // Gives access to the Encoding class, used to convert strings to byte arrays.
+
+using Crestron.SimplSharp;
+    // Crestron base library — provides ErrorLog, CrestronEnvironment, etc.
+
+using Crestron.SimplSharp.CrestronSockets;
+    // Crestron TCP socket classes — provides TCPClient, SocketStatus, SocketErrorCodes, etc.
+
+using Crestron.SimplSharpPro;
+    // Core Crestron Pro library — provides CrestronControlSystem (the base class for this program).
+
+using Crestron.SimplSharpPro.CrestronThread;
+    // Crestron thread management — provides the Thread class used to set max user threads.
+
+using Crestron.SimplSharpPro.DeviceSupport;
+    // Device support types — provides BasicTriList and SigEventArgs used in the signal-change handler.
+
+using Crestron.SimplSharpPro.UI;
+    // Touchpanel UI classes — provides Tsw770 (the TS-770 touchpanel object).
+
+--------------------------------------------------------------------------------
+NAMESPACE & CLASS DECLARATION (Lines 10–13)
+--------------------------------------------------------------------------------
+
+namespace RoomController
+    // Groups this code under the logical module name "RoomController".
+
+public class ControlSystem : CrestronControlSystem
+    // Defines the main program class.
+    // Inheriting from CrestronControlSystem gives access to Crestron runtime hooks
+    // such as InitializeSystem(), which is called automatically at startup.
+
+--------------------------------------------------------------------------------
+NETWORK TOPOLOGY (Lines 14–20) — Documentation only, no functional code
+--------------------------------------------------------------------------------
+
+// Netgear M4250 Port 1 -> RMC4                   -> 192.168.50.58
+// Netgear M4250 Port 2 -> TS-770                 -> 192.168.50.151
+// Netgear M4250 Port 3 -> Q-SYS Core Nano        -> 192.168.50.253
+// Netgear M4250 Port 4 -> Yealink MeetingBar A20 -> 192.168.50.190
+    // Maps each physical switch port to its connected device and assigned IP address.
+
+--------------------------------------------------------------------------------
+DEVICE CONFIGURATION — Fields & Constants (Lines 22–35)
+--------------------------------------------------------------------------------
+
+private Tsw770 _ts770;
+    // Declares a variable to hold the TS-770 touchpanel object instance.
+
+private const uint TS770_IPID = 0x03;
+    // Sets the IP-ID (hex 03) used to identify the TS-770 on the Crestron control network.
+    // This must match the IP-ID configured on the physical touchpanel.
+
+private const string QSYS_IP = "192.168.50.253";
+    // Stores the Q-SYS Core Nano's IP address for TCP communication.
+
+private const int QSYS_PORT = 1702;
+    // Stores the TCP port number used by the Q-SYS Core Nano's external control interface.
+
+private const string A20_IP = "192.168.50.190";
+    // Stores the Yealink MeetingBar A20's IP address for TCP communication.
+
+private const int A20_PORT = 5000;
+    // Stores the TCP port for the A20 (marked as a placeholder — confirm actual port with Yealink docs).
+
+private TCPClient _qsysClient;
+    // Declares a TCP client variable that will manage the socket connection to Q-SYS.
+
+private TCPClient _a20Client;
+    // Declares a TCP client variable that will manage the socket connection to the Yealink A20.
+
+--------------------------------------------------------------------------------
+TOUCHPANEL JOIN MAP — Constants (Lines 38–52)
+--------------------------------------------------------------------------------
+
+private const uint JOIN_ROOM_ON     = 1;
+    // Digital join 1 on the touchpanel triggers the "Room On" action.
+
+private const uint JOIN_ROOM_OFF    = 2;
+    // Digital join 2 triggers the "Room Off" action.
+
+private const uint JOIN_VOL_UP      = 3;
+    // Digital join 3 triggers "Volume Up".
+
+private const uint JOIN_VOL_DOWN    = 4;
+    // Digital join 4 triggers "Volume Down".
+
+private const uint JOIN_MUTE_TOGGLE = 5;
+    // Digital join 5 triggers the mute toggle.
+
+private const uint JOIN_TEAMS_HOME  = 6;
+    // Digital join 6 triggers the Teams Home screen navigation.
+
+private const uint FB_QSYS_ONLINE   = 101;
+    // Digital feedback join 101 — lights up on the touchpanel when Q-SYS is connected.
+
+private const uint FB_A20_ONLINE    = 102;
+    // Digital feedback join 102 — lights up on the touchpanel when the A20 is connected.
+
+private const uint FB_SYSTEM_READY  = 103;
+    // Digital feedback join 103 — lights up when BOTH Q-SYS and A20 are connected.
+
+private const uint TXT_STATUS       = 1;
+    // Serial (string) join 1 — the status message text field on the touchpanel.
+
+--------------------------------------------------------------------------------
+CONSTRUCTOR (Lines 53–63)
+--------------------------------------------------------------------------------
+
+public ControlSystem() : base()
+    // Constructor for the ControlSystem class.
+    // ": base()" calls the parent CrestronControlSystem constructor first.
+
+Thread.MaxNumberOfUserThreads = 20;
+    // Allows up to 20 concurrent user-created threads to run in this program.
+
+ErrorLog.Error("Thread config error: {0}", ex.Message);
+    // If setting the thread count fails, logs the error message to the Crestron error log.
+
+--------------------------------------------------------------------------------
+InitializeSystem() (Lines 65–79)
+--------------------------------------------------------------------------------
+
+public override void InitializeSystem()
+    // Overrides the Crestron base method that is called automatically when the system starts up.
+
+UpdateStatusText("System initializing...");
+    // Sends the string "System initializing..." to serial join 1 on the touchpanel.
+
+RegisterTouchpanel();
+    // Calls the method that instantiates and registers the TS-770 touchpanel.
+
+InitializeQsys();
+    // Calls the method that opens a TCP connection to the Q-SYS Core Nano.
+
+InitializeA20();
+    // Calls the method that opens a TCP connection to the Yealink A20.
+
+UpdateSystemReady();
+    // Checks if both devices are online and updates the system-ready feedback join accordingly.
+
+ErrorLog.Error("InitializeSystem error: {0}", ex.Message);
+    // Logs any unhandled exception that occurs during startup.
+
+--------------------------------------------------------------------------------
+RegisterTouchpanel() (Lines 81–104)
+--------------------------------------------------------------------------------
+
+private void RegisterTouchpanel()
+    // Method that creates and registers the TS-770 touchpanel with the Crestron runtime.
+
+_ts770 = new Tsw770(TS770_IPID, this);
+    // Creates a new Tsw770 object using IP-ID 0x03, associated with this control system.
+
+_ts770.SigChange += Ts770SigChange;
+    // Subscribes to the SigChange event so that Ts770SigChange() is called on every
+    // button press, release, or other signal change from the touchpanel.
+
+var result = _ts770.Register();
+    // Registers the touchpanel with the Crestron runtime and stores the result code.
+
+if (result == eDeviceRegistrationUnRegistrationResponse.Success)
+    // Checks whether registration succeeded.
+
+ErrorLog.Notice("TS-770 registered successfully on IPID 0x{0:X2}", TS770_IPID);
+    // Logs a success notice with the IP-ID formatted as a two-digit hex value.
+
+UpdateStatusText("TS-770 registered");
+    // Updates the touchpanel status text to confirm successful registration.
+
+ErrorLog.Error("TS-770 registration failed: {0}", result);
+    // Logs the failure response code if registration did not succeed.
+
+UpdateStatusText("TS-770 registration failed");
+    // Updates the touchpanel status text to reflect the failure.
+
+ErrorLog.Error("RegisterTouchpanel error: {0}", ex.Message);
+    // Logs any unexpected exception thrown during touchpanel registration.
+
+--------------------------------------------------------------------------------
+InitializeQsys() (Lines 106–131)
+--------------------------------------------------------------------------------
+
+private void InitializeQsys()
+    // Method that creates a TCP client and connects to the Q-SYS Core Nano.
+
+_qsysClient = new TCPClient(QSYS_IP, QSYS_PORT, 4096);
+    // Creates a new TCPClient targeting the Q-SYS IP/port, with a 4096-byte receive buffer.
+
+var result = _qsysClient.ConnectToServer();
+    // Attempts to open the TCP connection and stores the result code.
+
+if (result == SocketErrorCodes.SOCKET_OK)
+    // Checks whether the connection was established successfully.
+
+ErrorLog.Notice("Connected to Q-SYS Core Nano at {0}:{1}", QSYS_IP, QSYS_PORT);
+    // Logs a success notice with the IP address and port.
+
+SetBoolFeedback(FB_QSYS_ONLINE, true);
+    // Turns ON digital feedback join 101 on the touchpanel (Q-SYS online indicator).
+
+UpdateStatusText("Q-SYS online");
+    // Updates the touchpanel status text to "Q-SYS online".
+
+ErrorLog.Error("Q-SYS connection failed: {0}", result);
+    // Logs the failure code if the connection was not established.
+
+SetBoolFeedback(FB_QSYS_ONLINE, false);
+    // Turns OFF digital feedback join 101 (Q-SYS offline).
+
+UpdateStatusText("Q-SYS offline");
+    // Updates the touchpanel status text to "Q-SYS offline".
+
+ErrorLog.Error("InitializeQsys error: {0}", ex.Message);
+    // Logs any unexpected exception during Q-SYS initialization.
+
+SetBoolFeedback(FB_QSYS_ONLINE, false);
+    // Ensures the Q-SYS online indicator is OFF when an exception occurs.
+
+--------------------------------------------------------------------------------
+InitializeA20() (Lines 133–158)
+--------------------------------------------------------------------------------
+
+private void InitializeA20()
+    // Method that creates a TCP client and connects to the Yealink A20.
+    // Follows the same structure as InitializeQsys().
+
+_a20Client = new TCPClient(A20_IP, A20_PORT, 4096);
+    // Creates a new TCPClient targeting the A20 IP/port, with a 4096-byte receive buffer.
+
+var result = _a20Client.ConnectToServer();
+    // Attempts to open the TCP connection to the A20 and stores the result code.
+
+if (result == SocketErrorCodes.SOCKET_OK)
+    // Checks whether the connection succeeded.
+
+ErrorLog.Notice("Connected to Yealink A20 at {0}:{1}", A20_IP, A20_PORT);
+    // Logs a success notice with the A20's IP address and port.
+
+SetBoolFeedback(FB_A20_ONLINE, true);
+    // Turns ON digital feedback join 102 on the touchpanel (A20 online indicator).
+
+UpdateStatusText("A20 online");
+    // Updates the touchpanel status text to "A20 online".
+
+ErrorLog.Error("A20 connection failed: {0}", result);
+    // Logs the failure code if the connection was not established.
+
+SetBoolFeedback(FB_A20_ONLINE, false);
+    // Turns OFF digital feedback join 102 (A20 offline).
+
+UpdateStatusText("A20 offline");
+    // Updates the touchpanel status text to "A20 offline".
+
+ErrorLog.Error("InitializeA20 error: {0}", ex.Message);
+    // Logs any unexpected exception during A20 initialization.
+
+SetBoolFeedback(FB_A20_ONLINE, false);
+    // Ensures the A20 online indicator is OFF when an exception occurs.
+
+--------------------------------------------------------------------------------
+Ts770SigChange() (Lines 160–201)
+--------------------------------------------------------------------------------
+
+private void Ts770SigChange(BasicTriList currentDevice, SigEventArgs args)
+    // Event handler called automatically whenever any signal changes on the TS-770 touchpanel.
+    // "currentDevice" is the touchpanel that fired the event; "args" contains signal details.
+
+if (args.Sig.Type != eSigType.Bool)
+    // Checks if the signal type is NOT a digital (boolean) signal.
+
+    return;
+    // If it's an analog or serial signal, exit immediately — this handler only processes digital signals.
+
+if (!args.Sig.BoolValue)
+    // Checks if the signal value is FALSE (i.e., the button was released, not pressed).
+
+    return;
+    // Exit immediately on button release — only button presses (true) trigger actions.
+
+switch (args.Sig.Number)
+    // Evaluates which join number (button) was pressed.
+
+case JOIN_ROOM_ON:     RoomOn();     break;
+    // Join 1 pressed — calls the RoomOn() method.
+
+case JOIN_ROOM_OFF:    RoomOff();    break;
+    // Join 2 pressed — calls the RoomOff() method.
+
+case JOIN_VOL_UP:      VolumeUp();   break;
+    // Join 3 pressed — calls the VolumeUp() method.
+
+case JOIN_VOL_DOWN:    VolumeDown(); break;
+    // Join 4 pressed — calls the VolumeDown() method.
+
+case JOIN_MUTE_TOGGLE: MuteToggle(); break;
+    // Join 5 pressed — calls the MuteToggle() method.
+
+case JOIN_TEAMS_HOME:  TeamsHome();  break;
+    // Join 6 pressed — calls the TeamsHome() method.
+
+ErrorLog.Error("Ts770SigChange error: {0}", ex.Message);
+    // Logs any error that occurs while processing a signal change.
+
+--------------------------------------------------------------------------------
+RoomOn() (Lines 203–213)
+--------------------------------------------------------------------------------
+
+private void RoomOn()
+    // Called when the "Room On" button (join 1) is pressed on the touchpanel.
+
+UpdateStatusText("Room On");
+    // Updates the touchpanel status text to "Room On".
+
+SendQsys("csp \"RoomPower\" 1\n");
+    // Sends a Q-SYS "set control point" command to turn the "RoomPower" named control ON (value = 1).
+
+SendQsys("csv \"MainMute\" 0\n");
+    // Sends a Q-SYS "set control value" command to set "MainMute" to 0 (unmuted).
+
+SendA20("ROOM_ON\r\n");
+    // Sends the "ROOM_ON" string command to the Yealink A20 over TCP.
+
+UpdateSystemReady();
+    // Rechecks both device connection states and refreshes the system-ready feedback join.
+
+--------------------------------------------------------------------------------
+RoomOff() (Lines 215–225)
+--------------------------------------------------------------------------------
+
+private void RoomOff()
+    // Called when the "Room Off" button (join 2) is pressed on the touchpanel.
+
+UpdateStatusText("Room Off");
+    // Updates the touchpanel status text to "Room Off".
+
+SendQsys("csp \"RoomPower\" 0\n");
+    // Sends a Q-SYS command to turn "RoomPower" OFF (value = 0).
+
+SendQsys("csv \"MainMute\" 1\n");
+    // Sends a Q-SYS command to set "MainMute" to 1 (muted).
+
+SendA20("ROOM_OFF\r\n");
+    // Sends the "ROOM_OFF" string command to the Yealink A20 over TCP.
+
+UpdateSystemReady();
+    // Rechecks device connection states and refreshes the system-ready feedback join.
+
+--------------------------------------------------------------------------------
+VolumeUp() (Lines 227–231)
+--------------------------------------------------------------------------------
+
+private void VolumeUp()
+    // Called when the "Volume Up" button (join 3) is pressed.
+
+UpdateStatusText("Volume Up");
+    // Updates the touchpanel status text to "Volume Up".
+
+SendQsys("css \"MainLevel\" 1 1\n");
+    // Sends a Q-SYS "set control step" command to increase "MainLevel" by 1 step (step size = 1).
+
+--------------------------------------------------------------------------------
+VolumeDown() (Lines 233–237)
+--------------------------------------------------------------------------------
+
+private void VolumeDown()
+    // Called when the "Volume Down" button (join 4) is pressed.
+
+UpdateStatusText("Volume Down");
+    // Updates the touchpanel status text to "Volume Down".
+
+SendQsys("css \"MainLevel\" -1 1\n");
+    // Sends a Q-SYS "set control step" command to decrease "MainLevel" by 1 step (step size = 1).
+
+--------------------------------------------------------------------------------
+MuteToggle() (Lines 239–243)
+--------------------------------------------------------------------------------
+
+private void MuteToggle()
+    // Called when the "Mute Toggle" button (join 5) is pressed.
+
+UpdateStatusText("Mute Toggle");
+    // Updates the touchpanel status text to "Mute Toggle".
+
+SendQsys("ct \"MainMute\"\n");
+    // Sends a Q-SYS "control toggle" command to flip the current state of "MainMute".
+
+--------------------------------------------------------------------------------
+TeamsHome() (Lines 245–249)
+--------------------------------------------------------------------------------
+
+private void TeamsHome()
+    // Called when the "Teams Home" button (join 6) is pressed.
+
+UpdateStatusText("Teams Home");
+    // Updates the touchpanel status text to "Teams Home".
+
+SendA20("TEAMS_HOME\r\n");
+    // Sends the "TEAMS_HOME" command to the Yealink A20, causing it to navigate to the Teams home screen.
+
+--------------------------------------------------------------------------------
+SendQsys() (Lines 251–274)
+--------------------------------------------------------------------------------
+
+private void SendQsys(string command)
+    // Helper method that sends a text command to the Q-SYS Core Nano over TCP.
+
+if (_qsysClient != null && _qsysClient.ClientStatus == SocketStatus.SOCKET_STATUS_CONNECTED)
+    // Checks that the Q-SYS client object exists AND that the socket is currently connected.
+
+byte[] data = Encoding.ASCII.GetBytes(command);
+    // Converts the command string to a byte array using ASCII encoding (required for raw TCP transmission).
+
+_qsysClient.SendData(data, data.Length);
+    // Transmits the byte array over the TCP socket to Q-SYS.
+
+ErrorLog.Notice("Q-SYS >> {0}", command.Trim());
+    // Logs the outgoing command (with leading/trailing whitespace removed) to the Crestron error log.
+
+SetBoolFeedback(FB_QSYS_ONLINE, true);
+    // Confirms Q-SYS is online by setting feedback join 101 to true on the touchpanel.
+
+ErrorLog.Warn("Q-SYS not connected. Command not sent.");
+    // Logs a warning that the command was dropped because the socket is not connected.
+
+SetBoolFeedback(FB_QSYS_ONLINE, false);
+    // Marks Q-SYS as offline on the touchpanel (join 101 = false).
+
+UpdateStatusText("Q-SYS offline");
+    // Updates the touchpanel status text to "Q-SYS offline".
+
+ErrorLog.Error("SendQsys error: {0}", ex.Message);
+    // Logs any exception that occurs while trying to send data.
+
+SetBoolFeedback(FB_QSYS_ONLINE, false);
+    // Ensures the Q-SYS online indicator is OFF if an exception is thrown.
+
+--------------------------------------------------------------------------------
+SendA20() (Lines 276–299)
+--------------------------------------------------------------------------------
+
+private void SendA20(string command)
+    // Helper method that sends a text command to the Yealink A20 over TCP.
+    // Follows the same structure as SendQsys().
+
+if (_a20Client != null && _a20Client.ClientStatus == SocketStatus.SOCKET_STATUS_CONNECTED)
+    // Checks that the A20 client object exists AND that the socket is currently connected.
+
+byte[] data = Encoding.ASCII.GetBytes(command);
+    // Converts the command string to a byte array using ASCII encoding.
+
+_a20Client.SendData(data, data.Length);
+    // Transmits the byte array over the TCP socket to the A20.
+
+ErrorLog.Notice("A20 >> {0}", command.Trim());
+    // Logs the outgoing command (trimmed) to the Crestron error log.
+
+SetBoolFeedback(FB_A20_ONLINE, true);
+    // Confirms A20 is online by setting feedback join 102 to true on the touchpanel.
+
+ErrorLog.Warn("A20 not connected. Command not sent.");
+    // Logs a warning that the command was dropped because the socket is not connected.
+
+SetBoolFeedback(FB_A20_ONLINE, false);
+    // Marks the A20 as offline on the touchpanel (join 102 = false).
+
+UpdateStatusText("A20 offline");
+    // Updates the touchpanel status text to "A20 offline".
+
+ErrorLog.Error("SendA20 error: {0}", ex.Message);
+    // Logs any exception that occurs while trying to send data to the A20.
+
+SetBoolFeedback(FB_A20_ONLINE, false);
+    // Ensures the A20 online indicator is OFF if an exception is thrown.
+
+--------------------------------------------------------------------------------
+SetBoolFeedback() (Lines 301–312)
+--------------------------------------------------------------------------------
+
+private void SetBoolFeedback(uint join, bool value)
+    // Helper method that sets a digital (boolean) feedback join on the TS-770 touchpanel.
+
+if (_ts770 != null)
+    // Checks that the touchpanel object has been created before attempting to access it.
+
+_ts770.BooleanInput[join].BoolValue = value;
+    // Sets the specified digital join on the touchpanel to the given true/false value,
+    // which controls indicator lights, button states, etc. on the UI.
+
+ErrorLog.Error("SetBoolFeedback error: {0}", ex.Message);
+    // Logs any error that occurs while updating a feedback join.
+
+--------------------------------------------------------------------------------
+UpdateStatusText() (Lines 314–325)
+--------------------------------------------------------------------------------
+
+private void UpdateStatusText(string message)
+    // Helper method that pushes a status string to the touchpanel's text display field.
+
+if (_ts770 != null)
+    // Checks that the touchpanel object has been created before attempting to access it.
+
+_ts770.StringInput[TXT_STATUS].StringValue = message;
+    // Writes the message string to serial join 1 on the touchpanel,
+    // which displays it in the status text field of the UI.
+
+ErrorLog.Error("UpdateStatusText error: {0}", ex.Message);
+    // Logs any error that occurs while updating the status text.
+
+--------------------------------------------------------------------------------
+UpdateSystemReady() (Lines 327–336)
+--------------------------------------------------------------------------------
+
+private void UpdateSystemReady()
+    // Helper method that determines if all devices are online and updates the
+    // system-ready feedback join on the touchpanel.
+
+bool qsysOnline = _qsysClient != null &&
+                  _qsysClient.ClientStatus == SocketStatus.SOCKET_STATUS_CONNECTED;
+    // Evaluates to TRUE only if the Q-SYS client object exists AND its socket is connected.
+
+bool a20Online = _a20Client != null &&
+                 _a20Client.ClientStatus == SocketStatus.SOCKET_STATUS_CONNECTED;
+    // Evaluates to TRUE only if the A20 client object exists AND its socket is connected.
+
+SetBoolFeedback(FB_SYSTEM_READY, qsysOnline && a20Online);
+    // Sets feedback join 103 (system ready) to TRUE only when BOTH devices are online.
+    // If either device is offline, the system-ready indicator is FALSE.
+
+================================================================================
+  END OF ANNOTATION
+================================================================================
