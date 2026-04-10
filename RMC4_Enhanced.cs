@@ -48,6 +48,7 @@ namespace RoomController
         // ---- Room state snapshot
         public bool   occupancy_state           { get; set; }
         public bool   byod_state                { get; set; }
+        public bool   pc_teams_state            { get; set; }
         public bool   usb_state                 { get; set; }
         public bool   input_sync_state          { get; set; }
         public bool   display_state             { get; set; }
@@ -145,6 +146,16 @@ namespace RoomController
         private const uint JOIN_PRESENTATION_START    = 22;
         private const uint JOIN_PRESENTATION_STOP     = 23;
 
+        // PC Teams / BYOD peripheral takeover (joins 25-28)
+        // Join 25 — user presses "PC Teams" button: USB switches to PC, display routes to PC HDMI
+        // Join 26 — user exits PC Teams mode: peripherals return to room system
+        // Join 27 — USB-C hub/dock connected to PC (reported by hardware sensor)
+        // Join 28 — USB-C hub/dock disconnected from PC
+        private const uint JOIN_PC_TEAMS_ENTER        = 25;
+        private const uint JOIN_PC_TEAMS_EXIT         = 26;
+        private const uint JOIN_USBC_CONNECTED        = 27;
+        private const uint JOIN_USBC_DISCONNECTED     = 28;
+
         // Manual heartbeat trigger (join 24)
         private const uint JOIN_HEARTBEAT_TRIGGER     = 24;
 
@@ -179,6 +190,8 @@ namespace RoomController
         private const uint FB_SOURCE_ROUTE_ACTIVE     = 110;
         private const uint FB_PRESENTATION_ACTIVE     = 111;
         private const uint FB_SESSION_VALID           = 112;
+        private const uint FB_PC_TEAMS_ACTIVE         = 113;
+        private const uint FB_USBC_CONNECTED          = 114;
         private const uint FB_PROCESSOR_HEALTHY       = 120;
         private const uint FB_DISPLAY_HEALTHY         = 121;
         private const uint FB_CAMERA_HEALTHY          = 122;
@@ -208,6 +221,8 @@ namespace RoomController
         // ------------------------------------------------------------
         private bool   RoomOccupied;
         private bool   BYODActive;
+        private bool   PCTeamsActive;   // true while PC is using room peripherals for a Teams call
+        private bool   USBCConnected;   // true while a USB-C hub/dock is physically connected to the PC
         private bool   USBConnected;
         private bool   InputSyncActive;
         private bool   DisplayOn;
@@ -416,6 +431,14 @@ namespace RoomController
                     case JOIN_BYOD_ENTER:            OnByodEnter();         break;
                     case JOIN_BYOD_EXIT:             OnByodExit();          break;
 
+                    // ---- PC Teams peripheral takeover
+                    case JOIN_PC_TEAMS_ENTER:        OnPCTeamsEnter();      break;
+                    case JOIN_PC_TEAMS_EXIT:         OnPCTeamsExit();       break;
+
+                    // ---- USB-C hub/dock
+                    case JOIN_USBC_CONNECTED:        OnUsbCConnected();     break;
+                    case JOIN_USBC_DISCONNECTED:     OnUsbCDisconnected();  break;
+
                     // ---- USB
                     case JOIN_USB_CONNECTED:         OnUsbConnected();      break;
                     case JOIN_USB_DISCONNECTED:      OnUsbDisconnected();   break;
@@ -584,8 +607,99 @@ namespace RoomController
         }
 
         // ============================================================
-        // EVENT TRIGGERS — USB
+        // EVENT TRIGGERS — PC TEAMS PERIPHERAL TAKEOVER
+        //
+        // NOTE: This code does NOT talk to the PC's Teams application
+        // directly (Teams has no raw-TCP API).  What it does is
+        // instruct Q-SYS (and the physical USB switcher / HDMI
+        // switcher behind it) to hand the room's camera, mic, and
+        // speaker over to the PC so that the user can run Teams on
+        // their laptop using the room peripherals.
+        //
+        // Required hardware (configured and controlled via Q-SYS):
+        //   • USB switcher  — routes camera/mic/speaker USB to the PC
+        //   • HDMI switcher — routes PC video output to the room display
+        //   • USB-C hub/dock — carries power + USB + video in one cable
+        //
+        // Q-SYS Named Controls used:
+        //   "USBSwitch"     1 = room system  /  2 = PC
+        //   "DisplayInput"  1 = room default /  2 = PC HDMI
+        //   "PCTeamsMode"   0 = off          /  1 = on
         // ============================================================
+        private void OnPCTeamsEnter()
+        {
+            if (PCTeamsActive) return;
+            PCTeamsActive = true;
+
+            UpdateStatusText("PC Teams Active");
+            SetBoolFeedback(FB_PC_TEAMS_ACTIVE, true);
+
+            // 1. Route USB peripherals (camera, mic, speaker) to the PC
+            SendQsys("csp \"USBSwitch\" 2\n");
+            // 2. Switch the room display to the PC's HDMI input
+            SendQsys("csp \"DisplayInput\" 2\n");
+            // 3. Notify Q-SYS that PC Teams mode is active (audio routing etc.)
+            SendQsys("csp \"PCTeamsMode\" 1\n");
+
+            FireEvent("pc_teams_enter", eventValue: "1", userAction: true,
+                      notes: "USB peripherals and display routed to PC for Teams call");
+        }
+
+        private void OnPCTeamsExit()
+        {
+            if (!PCTeamsActive) return;
+            PCTeamsActive = false;
+
+            UpdateStatusText("PC Teams Inactive");
+            SetBoolFeedback(FB_PC_TEAMS_ACTIVE, false);
+
+            // 1. Return USB peripherals to the room system
+            SendQsys("csp \"USBSwitch\" 1\n");
+            // 2. Return the display to the default room input
+            SendQsys("csp \"DisplayInput\" 1\n");
+            // 3. Clear PC Teams mode in Q-SYS
+            SendQsys("csp \"PCTeamsMode\" 0\n");
+
+            FireEvent("pc_teams_exit", eventValue: "0", userAction: true,
+                      notes: "USB peripherals and display returned to room system");
+        }
+
+        // ============================================================
+        // EVENT TRIGGERS — USB-C HUB / DOCK
+        //
+        // These joins are driven by a hardware sensor or Q-SYS signal
+        // that detects whether a USB-C cable/hub is physically
+        // connected to the PC.  They complement OnPCTeamsEnter /
+        // OnPCTeamsExit with low-level connection state.
+        // ============================================================
+        private void OnUsbCConnected()
+        {
+            if (USBCConnected) return;
+            USBCConnected = true;
+
+            SetBoolFeedback(FB_USBC_CONNECTED, true);
+            UpdateStatusText("USB-C Hub Connected");
+            FireEvent("usbc_connected", eventValue: "1", userAction: false,
+                      notes: "USB-C hub/dock physically connected to PC");
+        }
+
+        private void OnUsbCDisconnected()
+        {
+            if (!USBCConnected) return;
+            USBCConnected = false;
+
+            SetBoolFeedback(FB_USBC_CONNECTED, false);
+            UpdateStatusText("USB-C Hub Disconnected");
+
+            // If the cable is pulled while in PC Teams mode, exit cleanly
+            if (PCTeamsActive)
+                OnPCTeamsExit();
+
+            FireEvent("usbc_disconnected", eventValue: "0", userAction: false,
+                      notes: "USB-C hub/dock disconnected from PC");
+        }
+
+
         private void OnUsbConnected()
         {
             if (USBConnected) return;
@@ -1051,6 +1165,7 @@ namespace RoomController
                     // Room state snapshot
                     occupancy_state         = RoomOccupied,
                     byod_state              = BYODActive,
+                    pc_teams_state          = PCTeamsActive,
                     usb_state               = USBConnected,
                     input_sync_state        = InputSyncActive,
                     display_state           = DisplayOn,
@@ -1275,6 +1390,7 @@ namespace RoomController
             AppendBool(sb, "session_valid",           e.session_valid);
             AppendBool(sb, "occupancy_state",         e.occupancy_state);
             AppendBool(sb, "byod_state",              e.byod_state);
+            AppendBool(sb, "pc_teams_state",          e.pc_teams_state);
             AppendBool(sb, "usb_state",               e.usb_state);
             AppendBool(sb, "input_sync_state",        e.input_sync_state);
             AppendBool(sb, "display_state",           e.display_state);
