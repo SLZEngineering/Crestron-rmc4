@@ -199,9 +199,9 @@ namespace RoomController
         // ------------------------------------------------------------
         // TIMER INTERVALS
         // ------------------------------------------------------------
-        private const long SESSION_GRACE_MS           = 30000;   // 30 s
-        private const long IDLE_TIMEOUT_MS            = 300000;  // 5 min
-        private const long HEARTBEAT_INTERVAL_MS      = 60000;   // 1 min
+        private const long SESSION_GRACE_MS           = 30000;   // 30,000 ms (30 s)
+        private const long IDLE_TIMEOUT_MS            = 300000;  // 300,000 ms (5 min)
+        private const long HEARTBEAT_INTERVAL_MS      = 60000;   // 60,000 ms (1 min)
 
         // ------------------------------------------------------------
         // STATE VARIABLES
@@ -1234,7 +1234,7 @@ namespace RoomController
         private string BuildHealthSummary()
         {
             // Compact health summary string: "P:1|D:1|C:1|M:1|S:1|SW:1|UB:1"
-            return string.Format("P:{0}|D:{1}|C:{2}|M:{3}|SP:{4}|SW:{5}|UB:{6}",
+            return string.Format("P:{0}|D:{1}|C:{2}|M:{3}|S:{4}|SW:{5}|UB:{6}",
                 ProcessorHealthy  ? 1 : 0,
                 DisplayHealthy    ? 1 : 0,
                 CameraHealthy     ? 1 : 0,
@@ -1294,14 +1294,28 @@ namespace RoomController
             return sb.ToString();
         }
 
+        /// <summary>
+        /// Escapes a string value for safe embedding inside a JSON double-quoted string.
+        /// </summary>
+        private static string JsonEscape(string val)
+        {
+            if (val == null) return string.Empty;
+            return val
+                .Replace("\\", "\\\\")
+                .Replace("\"", "\\\"")
+                .Replace("\n",  "\\n")
+                .Replace("\r",  "\\r")
+                .Replace("\t",  "\\t");
+        }
+
         private static void AppendStr(StringBuilder sb, string key, string val)
         {
-            sb.AppendFormat("\"{0}\":\"{1}\",", key, (val ?? string.Empty).Replace("\"", "'"));
+            sb.AppendFormat("\"{0}\":\"{1}\",", key, JsonEscape(val));
         }
 
         private static void AppendStrLast(StringBuilder sb, string key, string val)
         {
-            sb.AppendFormat("\"{0}\":\"{1}\"", key, (val ?? string.Empty).Replace("\"", "'"));
+            sb.AppendFormat("\"{0}\":\"{1}\"", key, JsonEscape(val));
         }
 
         private static void AppendInt(StringBuilder sb, string key, int val)
