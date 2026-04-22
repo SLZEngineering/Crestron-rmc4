@@ -1,0 +1,9 @@
+<XPanel>
+  <Button id="lightOn" text="Lights ON" action="lightOnAction" />
+  <Button id="lightOff" text="Lights OFF" action="lightOffAction" />
+  <Button id="projectorOn" text="Projector ON" action="projectorOnAction" />
+  <Button id="projectorOff" text="Projector OFF" action="projectorOffAction" />
+  <Slider id="volume" text="Volume" min="0" max="100" />
+  <Display id="statusDisplay" text="Status: OK" />
+  <Display id="systemInfo" text="System Info: Active" />
+</XPanel>
